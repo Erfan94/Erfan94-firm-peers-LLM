@@ -1,0 +1,8 @@
+pandas
+numpy
+scikit-learn
+tqdm
+python-dotenv
+openai>=1.0.0
+tiktoken
+PyPDF2
