@@ -1,8 +1,22 @@
-pandas
-numpy
-scikit-learn
-tqdm
-python-dotenv
+# Core data & math
+pandas>=1.5
+numpy>=1.23
+scikit-learn>=1.2
+tqdm>=4.64
+
+# PDF parsing
+PyPDF2>=3.0
+
+# Embeddings & tokens
 openai>=1.0.0
-tiktoken
-PyPDF2
+tiktoken>=0.5
+
+# Env vars
+python-dotenv>=1.0
+
+# Download from Google Drive
+gdown>=4.7
+
+# App / viz
+streamlit>=1.32
+matplotlib>=3.7

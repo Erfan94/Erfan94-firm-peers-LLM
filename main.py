@@ -1,3 +1,10 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Sep  3 09:17:34 2025
+
+@author: Erfan
+"""
+
 import os
 from tkinter import Tk, filedialog
 import PyPDF2
@@ -26,27 +33,51 @@ if not file_paths:
     print('No files selected!')
     exit()
 
-# ─── Extract text from PDFs ──────────────────────────────────────────────────
+# ─── Q&A detector (robust) ───────────────────────────────────────────────────
+# Examples handled: Q&A, Q & A, QUESTION AND ANSWER, Questions & Answers Session, etc.
+QNA_REGEX = re.compile(
+    r"(Q\s*&\s*A|Q\s*\/\s*A|Q\s*-\s*A|Q&A|Q & A|Question(?:s)?\s*(?:and|&)\s*Answer(?:s)?(?:\s*Session)?)",
+    re.IGNORECASE
+)
+
+
+# ─── Extract text from PDFs (keep only AFTER Q&A; drop if not found) ─────────
 company_transcripts = {}
+dropped = []
+
 for path in file_paths:
     company_name = os.path.splitext(os.path.basename(path))[0]
-    with open(path, 'rb') as f:
-        reader = PyPDF2.PdfReader(f)
-        text_parts = []
-        for page in reader.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text_parts.append(page_text)
-        full_text = "\n".join(text_parts).strip()
+    try:
+        with open(path, 'rb') as f:
+            reader = PyPDF2.PdfReader(f)
+            text_parts = []
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text_parts.append(page_text)
+            full_text = "\n".join(text_parts).strip()
 
-        # Keep only Q&A section
-        match = re.search(r"(Q&A|question[- ]and[- ]answer)", full_text, re.IGNORECASE)
+        # Find start of Q&A and keep ONLY after that marker
+        match = QNA_REGEX.search(full_text)
         if match:
-            qna_start = match.start()
-            full_text = full_text[qna_start:]
+            qna_start = match.end()  # start AFTER the Q&A heading itself
+            qna_text = full_text[qna_start:].strip()
+            if qna_text:
+                company_transcripts[company_name] = qna_text
+            else:
+                print(f"⚠️ Q&A empty after marker in {company_name}; dropping transcript.")
+                dropped.append(company_name)
         else:
-            print(f"⚠️ No Q&A section found in {company_name}, keeping full transcript.")
-        company_transcripts[company_name] = full_text
+            print(f"⚠️ No Q&A section found in {company_name}; dropping transcript.")
+            dropped.append(company_name)
+
+    except Exception as e:
+        print(f"❌ Error reading {company_name}: {e}")
+        dropped.append(company_name)
+
+if not company_transcripts:
+    print("No transcripts with Q&A found. Exiting.")
+    exit()
 
 # ─── Tokenize and chunk using tiktoken ───────────────────────────────────────
 encoding = tiktoken.encoding_for_model("text-embedding-3-large")
@@ -73,11 +104,18 @@ def chunk_text(text, max_tokens):
 # ─── Generate embeddings for each chunk ──────────────────────────────────────
 model_id = "text-embedding-3-large"
 company_chunk_embeddings = {}
+
+# Only names with kept Q&A
 company_names = list(company_transcripts.keys())
 
 for name in tqdm(company_names, desc="Generating chunk embeddings"):
     text = company_transcripts[name]
     chunks = chunk_text(text, max_tokens=max_tokens)
+
+    if not chunks:
+        print(f"⚠️ No non-empty chunks for {name}; dropping from analysis.")
+        continue
+
     chunk_vectors = []
     for chunk in chunks:
         response = client.embeddings.create(
@@ -85,7 +123,16 @@ for name in tqdm(company_names, desc="Generating chunk embeddings"):
             input=chunk
         )
         chunk_vectors.append(response.data[0].embedding)
-    company_chunk_embeddings[name] = np.array(chunk_vectors, dtype=np.float32)
+
+    if chunk_vectors:
+        company_chunk_embeddings[name] = np.array(chunk_vectors, dtype=np.float32)
+
+# Remove any companies that failed to produce embeddings
+company_names = [n for n in company_names if n in company_chunk_embeddings]
+
+if len(company_names) < 2:
+    print("Not enough transcripts with Q&A to compute similarities. Exiting.")
+    exit()
 
 # ─── Top-K MaxSim (Solution 1) helper ────────────────────────────────────────
 def topk_maxsim_symmetric(chunks_a: np.ndarray, chunks_b: np.ndarray, k: int = 10) -> float:
@@ -117,6 +164,9 @@ for i, name_a in enumerate(company_names):
         similarity_matrix.at[name_b, name_a] = score
 
 # ─── Print Closest Peers ─────────────────────────────────────────────────────
+print("\nDropped transcripts (no Q&A found or invalid):")
+print(", ".join(dropped) if dropped else "(none)")
+
 print("\nClosest Peers (Top-K Symmetric MaxSim, Q&A only):\n")
 for name in company_names:
     sims = similarity_matrix.loc[name].sort_values(ascending=False)
@@ -125,3 +175,12 @@ for name in company_names:
         print(f"{name} → {top_peer} (Similarity: {sims.iloc[1]:.4f})")
     else:
         print(f"{name} → (no peers)")
+
+# ─── Save Results ────────────────────────────────────────────────────────────
+os.makedirs("data/outputs", exist_ok=True)
+
+# Save full similarity matrix
+similarity_matrix.to_csv("data/outputs/similarity_matrix_qna.csv")
+
+print("\n✅ Results saved to:")
+print("   data/outputs/similarity_matrix_qna.csv")
