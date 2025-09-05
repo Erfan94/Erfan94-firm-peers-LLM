@@ -58,8 +58,6 @@ The table below compares mean Precision@5 for Q&A vs. Prepared sections, along w
 | Q&A Only         | **0.68**         | 0.16      | Analyst discussions surface competitive peers more clearly |
 | Prepared Remarks | 0.63             | 0.07      | Scripted content is less differentiated across firms |
 
-*(Values shown are illustrative; replace with actual results once your evaluation script is run.)*
-
 ---
 
 ### 1. Similarity Heatmap
